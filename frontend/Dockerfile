@@ -1,23 +1,24 @@
-FROM node:22-alpine AS build
-
+# ---- Build stage: has npm, used only to install deps ----
+FROM node:22-alpine AS builder
 WORKDIR /app
-
 COPY package*.json ./
-RUN npm install
-
+RUN npm ci --omit=dev
 COPY . .
 
-ARG VITE_API_URL
-ENV VITE_API_URL=$VITE_API_URL
+# ---- Runtime stage: patched OS, no npm CLI at all ----
+FROM node:22-alpine
+RUN apk update && apk upgrade --no-cache
+WORKDIR /app
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app ./
 
-RUN npm run build
+# Strip npm/npx/corepack/yarn and their bundled node_modules —
+# not needed at runtime, and this is where the CVEs were hiding
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /opt/yarn-v*
 
-
-FROM nginx:alpine
-
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+USER node
+EXPOSE 3000
+CMD ["node", "src/server.js"]
